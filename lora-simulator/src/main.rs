@@ -31,6 +31,7 @@ struct LoraPacket {
     device_type: String,
     device_id: String,
     zone: String,
+    seq_id: u64,
     timestamp: String,
     data: LoraData,
 }
@@ -165,6 +166,8 @@ async fn main() {
     }
 
     let client = Client::new();
+    let mut soil_seq: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    let mut corrosion_seq: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
 
     loop {
         info!("===== 开始新的一轮数据上报 =====");
@@ -172,10 +175,13 @@ async fn main() {
         let mut fail_count = 0;
 
         for i in 0..args.soil_sensors {
+            let device_id = format!("SOIL-{:03}", i + 1);
+            let seq = soil_seq.entry(device_id.clone()).and_modify(|s| *s += 1).or_insert(1);
             let packet = LoraPacket {
                 device_type: "soil_sensor".to_string(),
-                device_id: format!("SOIL-{:03}", i + 1),
+                device_id: device_id.clone(),
                 zone: zone_for_soil(i),
+                seq_id: *seq,
                 timestamp: Utc::now().to_rfc3339(),
                 data: LoraData::Soil(generate_soil_data(i)),
             };
@@ -192,10 +198,13 @@ async fn main() {
         }
 
         for i in 0..args.corrosion_probes {
+            let device_id = format!("CORR-{:03}", i + 1);
+            let seq = corrosion_seq.entry(device_id.clone()).and_modify(|s| *s += 1).or_insert(1);
             let packet = LoraPacket {
                 device_type: "corrosion_probe".to_string(),
-                device_id: format!("CORR-{:03}", i + 1),
+                device_id: device_id.clone(),
                 zone: zone_for_corrosion(i),
+                seq_id: *seq,
                 timestamp: Utc::now().to_rfc3339(),
                 data: LoraData::Corrosion(generate_corrosion_data(i)),
             };

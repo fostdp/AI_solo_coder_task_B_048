@@ -34,23 +34,36 @@ struct NeuralNetwork {
     hidden_weights: Vec<Vec<f64>>,
     hidden_bias: Vec<f64>,
     output_bias: f64,
+    dropout_rate: f64,
+    l2_lambda: f64,
 }
 
 impl NeuralNetwork {
     fn new(input_size: usize, hidden_size: usize) -> Self {
+        Self::with_regularization(input_size, hidden_size, 0.2, 0.001)
+    }
+
+    fn with_regularization(
+        input_size: usize,
+        hidden_size: usize,
+        dropout_rate: f64,
+        l2_lambda: f64,
+    ) -> Self {
         let mut rng = rand::thread_rng();
+        let scale = (2.0 / input_size as f64).sqrt();
         let mut input_weights = Vec::with_capacity(hidden_size);
         for _ in 0..hidden_size {
             let mut row = Vec::with_capacity(input_size);
             for _ in 0..input_size {
-                row.push(rng.gen_range(-0.5..0.5));
+                row.push(rng.gen_range(-0.5..0.5) * scale);
             }
             input_weights.push(row);
         }
 
+        let hidden_scale = (2.0 / hidden_size as f64).sqrt();
         let mut hidden_weights = Vec::with_capacity(hidden_size);
         for _ in 0..hidden_size {
-            hidden_weights.push(vec![rng.gen_range(-0.3..0.3)]);
+            hidden_weights.push(vec![rng.gen_range(-0.3..0.3) * hidden_scale]);
         }
 
         let hidden_bias: Vec<f64> = (0..hidden_size).map(|_| rng.gen_range(-0.1..0.1)).collect();
@@ -61,22 +74,32 @@ impl NeuralNetwork {
             hidden_weights,
             hidden_bias,
             output_bias,
+            dropout_rate,
+            l2_lambda,
         }
     }
 
-    fn forward(&self, inputs: &[f64]) -> f64 {
+    fn forward(&self, inputs: &[f64], training: bool) -> f64 {
         let mut hidden = vec![0.0; self.hidden_bias.len()];
+        let mut rng = rand::thread_rng();
+
         for i in 0..self.hidden_bias.len() {
             let mut sum = self.hidden_bias[i];
             for j in 0..inputs.len() {
                 sum += self.input_weights[i][j] * inputs[j];
             }
             hidden[i] = Self::tanh(sum);
+
+            if training && rng.gen::<f64>() < self.dropout_rate {
+                hidden[i] = 0.0;
+            }
         }
+
+        let scale = if training { 1.0 / (1.0 - self.dropout_rate) } else { 1.0 };
 
         let mut output = self.output_bias;
         for i in 0..hidden.len() {
-            output += hidden[i] * self.hidden_weights[i][0];
+            output += hidden[i] * self.hidden_weights[i][0] * scale;
         }
         Self::sigmoid(output) * 1.5
     }
@@ -87,6 +110,21 @@ impl NeuralNetwork {
 
     fn sigmoid(x: f64) -> f64 {
         1.0 / (1.0 + (-x).exp())
+    }
+
+    fn compute_l2_loss(&self) -> f64 {
+        let mut loss = 0.0;
+        for row in &self.input_weights {
+            for w in row {
+                loss += w * w;
+            }
+        }
+        for row in &self.hidden_weights {
+            for w in row {
+                loss += w * w;
+            }
+        }
+        self.l2_lambda * loss
     }
 }
 
@@ -120,7 +158,7 @@ impl CorrosionPredictor {
 
         let inputs = vec![temp_norm, hum_norm, ph_norm, cl_norm, material_factor, rate_norm];
 
-        let env_acceleration = self.network.forward(&inputs);
+        let env_acceleration = self.network.forward(&inputs, false);
 
         let predicted_rate_7d = current_rate * (1.0 + env_acceleration * 0.15);
         let predicted_rate_30d = current_rate * (1.0 + env_acceleration * 0.45);

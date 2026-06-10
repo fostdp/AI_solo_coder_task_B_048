@@ -4,7 +4,9 @@ mod corrosion_algorithm;
 mod error;
 mod handlers;
 mod influxdb_store;
+mod lora_gateway;
 mod models;
+mod nn_model;
 
 use std::sync::Arc;
 use actix_cors::Cors;
@@ -49,6 +51,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/stats", web::get().to(handlers::get_stats))
             .route("/api/locations", web::get().to(handlers::get_locations))
             .route("/api/lora/data", web::post().to(handlers::receive_lora_data))
+            .route("/api/lora/gateway-stats", web::get().to(handlers::get_gateway_stats))
             .route("/api/corrosion/trend/{probe_id}", web::get().to(handlers::get_corrosion_trend))
             .route("/api/corrosion/heatmap", web::get().to(handlers::get_heatmap))
             .route("/api/corrosion/prediction/{probe_id}", web::get().to(handlers::get_prediction))

@@ -4,6 +4,7 @@ use crate::alarm::AlarmService;
 use crate::corrosion_algorithm::{calculate_corrosion_rate_lpr, CorrosionPredictor, StabilityAnalyzer};
 use crate::error::AppError;
 use crate::influxdb_store::InfluxDBStore;
+use crate::lora_gateway::LoraGateway;
 use crate::models::{
     ApiResponse, CorrosionData, CorrosionPrediction, CorrosionTrendPoint, HeatmapPoint,
     LoraPacket, ProbeLocation, SoilData, StabilityAssessment, generate_device_locations,
@@ -14,6 +15,7 @@ pub struct AppState {
     pub store: InfluxDBStore,
     pub alarm: AlarmService,
     pub predictor: CorrosionPredictor,
+    pub gateway: LoraGateway,
     pub locations: Vec<ProbeLocation>,
 }
 
@@ -23,6 +25,7 @@ impl AppState {
             store,
             alarm,
             predictor: CorrosionPredictor::new(),
+            gateway: LoraGateway::new(),
             locations: generate_device_locations(),
         }
     }
@@ -38,12 +41,10 @@ pub async fn get_locations(
     Ok(HttpResponse::Ok().json(ApiResponse::ok(data.locations.clone())))
 }
 
-pub async fn receive_lora_data(
-    data: web::Data<Arc<AppState>>,
-    packet: web::Json<LoraPacket>,
-) -> Result<HttpResponse, AppError> {
-    let packet = packet.into_inner();
-
+async fn process_packet(
+    data: &web::Data<Arc<AppState>>,
+    packet: &LoraPacket,
+) -> Result<(), AppError> {
     match &packet.data {
         crate::models::LoraData::Soil(soil) => {
             let soil_data = SoilData {
@@ -63,8 +64,8 @@ pub async fn receive_lora_data(
                 .await?;
 
             tracing::info!(
-                "收到土壤数据: {} | T:{:.2}C H:{:.1}% pH:{:.2} Cl:{:.1}ppm",
-                packet.device_id, soil.temperature, soil.humidity, soil.ph, soil.chloride
+                "处理土壤数据 seq={}: {} | T:{:.2}C H:{:.1}% pH:{:.2} Cl:{:.1}ppm",
+                packet.seq_id, packet.device_id, soil.temperature, soil.humidity, soil.ph, soil.chloride
             );
         }
         crate::models::LoraData::Corrosion(corr) => {
@@ -85,13 +86,44 @@ pub async fn receive_lora_data(
                 .await?;
 
             tracing::info!(
-                "收到腐蚀数据: {} | R:{:.2}Ω Rp:{:.2}Ω 速率:{:.4}mm/年",
-                packet.device_id, corr.resistance, corr.polarization_resistance, corrosion_rate
+                "处理腐蚀数据 seq={}: {} | R:{:.2}Ω Rp:{:.2}Ω 速率:{:.4}mm/年",
+                packet.seq_id, packet.device_id, corr.resistance, corr.polarization_resistance, corrosion_rate
             );
         }
     }
+    Ok(())
+}
+
+pub async fn receive_lora_data(
+    data: web::Data<Arc<AppState>>,
+    packet: web::Json<LoraPacket>,
+) -> Result<HttpResponse, AppError> {
+    let packet = packet.into_inner();
+    let device_id = packet.device_id.clone();
+    let seq_id = packet.seq_id;
+
+    let ordered_packets = data.gateway.receive_packet(packet).await?;
+
+    if ordered_packets.is_empty() {
+        tracing::debug!(
+            "设备 {} seq={} 已缓存等待重排序",
+            device_id, seq_id
+        );
+        return Ok(HttpResponse::Ok().json(ApiResponse::<()>::ok(())));
+    }
+
+    for pkt in ordered_packets {
+        process_packet(&data, &pkt).await?;
+    }
 
     Ok(HttpResponse::Ok().json(ApiResponse::<()>::ok(())))
+}
+
+pub async fn get_gateway_stats(
+    data: web::Data<Arc<AppState>>,
+) -> Result<HttpResponse, AppError> {
+    let stats = data.gateway.get_stats().await;
+    Ok(HttpResponse::Ok().json(ApiResponse::ok(stats)))
 }
 
 pub async fn get_corrosion_trend(

@@ -29,6 +29,7 @@ pub struct LoraPacket {
     pub device_type: String,
     pub device_id: String,
     pub zone: String,
+    pub seq_id: u64,
     pub timestamp: DateTime<Utc>,
     pub data: LoraData,
 }
