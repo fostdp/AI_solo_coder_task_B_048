@@ -4,10 +4,6 @@ pub mod corrosion_engine;
 pub mod storage;
 pub mod alert_broker;
 pub mod metrics;
-pub mod heritage_vulnerability;
-pub mod protection_penetration;
-pub mod microbiome;
-pub mod groundwater;
 
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
@@ -19,11 +15,26 @@ use ingress::{LoraGateway, receive_lora_data, get_gateway_stats};
 use corrosion_engine::{CorrosionPredictor, StabilityAnalyzer, calculate_corrosion_rate_lpr};
 use storage::StorageService;
 use alert_broker::AlertService;
-use heritage_vulnerability::{FuzzyEvaluator, mock_eds_for_location};
-use protection_penetration::{PenetrationSimulator, get_material, all_materials, MaterialType};
+use heritage_vulnerability::{FuzzyEvaluator, EDSComposition, MaterialAlloy};
+use protection_penetration::{PenetrationThreadPool, SimulationRequest, get_material, all_materials, MaterialType, ProtectiveMaterial};
 use microbiome::{MicrobeCorrelationAnalyzer, default_microbe_dataset, MicrobiomeSample};
-use groundwater::{GroundwaterModel, ChlorideTransport, default_simulation_params, default_sensitive_zones_list};
+use groundwater::{GroundwaterModel, ChlorideTransport, default_simulation_params, default_sensitive_zones_list, GroundwaterTaskQueue};
 use prometheus::Registry;
+
+fn mock_eds_for_location(loc: &ProbeLocation) -> Option<EDSComposition> {
+    use heritage_vulnerability::eds_data::{default_iron_eds, default_bronze_eds};
+
+    if loc.device_type != "corrosion_probe" {
+        return None;
+    }
+    let is_iron = loc.material_type.as_deref().unwrap_or("iron") == "iron";
+    let artifact_id = format!("ART-{}", loc.device_id.replace("CORR-", ""));
+    if is_iron {
+        Some(default_iron_eds(&artifact_id, &loc.device_id))
+    } else {
+        Some(default_bronze_eds(&artifact_id, &loc.device_id))
+    }
+}
 
 pub struct AppState {
     pub config: AppConfig,
@@ -34,16 +45,17 @@ pub struct AppState {
     pub locations: Vec<ProbeLocation>,
     pub registry: Registry,
     pub fuzzy_evaluator: FuzzyEvaluator,
-    pub penetration_sim: PenetrationSimulator,
+    pub penetration_pool: PenetrationThreadPool,
     pub microbe_analyzer: MicrobeCorrelationAnalyzer,
     pub microbe_dataset: Vec<MicrobiomeSample>,
+    pub groundwater_queue: GroundwaterTaskQueue,
 }
 
 async fn health_check() -> impl Responder {
     let start = Instant::now();
     let response = HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
         "status": "healthy",
-        "version": "2.0.0",
+        "version": "3.0.0",
     })));
     let duration = start.elapsed().as_secs_f64();
     metrics::record_request("GET", "/api/health", "200", duration);
@@ -219,8 +231,22 @@ async fn simulate_penetration(
     let conc: f64 = query.get("concentration").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let hours: f64 = query.get("hours").and_then(|s| s.parse().ok()).unwrap_or(24.0);
     let mat = get_material(material);
-    let result = data.penetration_sim.simulate(&mat, temp, hum, porosity, conc, hours, None);
-    HttpResponse::Ok().json(ApiResponse::ok(result))
+    let request = SimulationRequest {
+        material: mat,
+        temp,
+        humidity: hum,
+        porosity,
+        concentration: conc,
+        hours,
+    };
+    let rx = data.penetration_pool.submit(request);
+    let result = tokio::task::spawn_blocking(move || {
+        rx.recv().expect("penetration worker panicked")
+    }).await;
+    match result {
+        Ok(r) => HttpResponse::Ok().json(ApiResponse::ok(r)),
+        Err(_) => HttpResponse::InternalServerError().json(ApiResponse::<()>::error("Penetration simulation failed")),
+    }
 }
 
 async fn get_protection_materials() -> impl Responder {
@@ -234,6 +260,43 @@ async fn get_microbiome_analysis(data: web::Data<Arc<AppState>>) -> impl Respond
 
 async fn get_microbiome_samples(data: web::Data<Arc<AppState>>) -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::ok(data.microbe_dataset.clone()))
+}
+
+async fn submit_groundwater_task(
+    data: web::Data<Arc<AppState>>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let task_type = query.get("type").cloned().unwrap_or_else(|| "groundwater".to_string());
+    let days: f64 = query.get("days").and_then(|s| s.parse().ok()).unwrap_or(90.0);
+    let threshold: f64 = query.get("threshold").and_then(|s| s.parse().ok()).unwrap_or(100.0);
+    let params = serde_json::json!({
+        "days": days,
+        "threshold": threshold,
+        "top_head": 15.0,
+        "bottom_head": 10.0,
+    });
+    let task_id = data.groundwater_queue.submit_task(&task_type, params);
+    HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
+        "task_id": task_id,
+        "status": "submitted",
+    })))
+}
+
+async fn get_groundwater_result(
+    data: web::Data<Arc<AppState>>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let task_id = match query.get("task_id") {
+        Some(id) => id.clone(),
+        None => return HttpResponse::BadRequest().json(ApiResponse::<()>::error("task_id required")),
+    };
+    match data.groundwater_queue.get_result(&task_id) {
+        Some(result) => HttpResponse::Ok().json(ApiResponse::ok(result)),
+        None => HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
+            "task_id": task_id,
+            "status": "pending",
+        }))),
+    }
 }
 
 async fn simulate_groundwater(
@@ -292,9 +355,10 @@ async fn main() -> std::io::Result<()> {
     let locations = generate_device_locations();
     let registry = metrics::register_custom_metrics();
     let fuzzy_evaluator = FuzzyEvaluator::new();
-    let penetration_sim = PenetrationSimulator::new();
+    let penetration_pool = PenetrationThreadPool::new(4);
     let microbe_analyzer = MicrobeCorrelationAnalyzer::new();
     let microbe_dataset = default_microbe_dataset();
+    let groundwater_queue = GroundwaterTaskQueue::new();
 
     let app_state = Arc::new(AppState {
         config,
@@ -305,9 +369,10 @@ async fn main() -> std::io::Result<()> {
         locations,
         registry,
         fuzzy_evaluator,
-        penetration_sim,
+        penetration_pool,
         microbe_analyzer,
         microbe_dataset,
+        groundwater_queue,
     });
 
     tracing::info!("Starting HTTP server at http://{}", listen_addr);
@@ -334,6 +399,8 @@ async fn main() -> std::io::Result<()> {
             .route("/api/microbiome/analysis", web::get().to(get_microbiome_analysis))
             .route("/api/groundwater/sensitive-zones", web::get().to(get_groundwater_sensitive_zones))
             .route("/api/groundwater/simulate", web::get().to(simulate_groundwater))
+            .route("/api/groundwater/task", web::post().to(submit_groundwater_task))
+            .route("/api/groundwater/result", web::get().to(get_groundwater_result))
     })
     .bind(&listen_addr)?
     .run()
