@@ -423,14 +423,18 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "corrosion-monitor-backend"
-version = "2.0.0"
+version = "3.0.0"
 dependencies = [
  "actix-cors",
  "actix-web",
  "chrono",
  "futures",
+ "groundwater",
+ "heritage-vulnerability",
  "influxdb",
+ "microbiome",
  "prometheus",
+ "protection-penetration",
  "rand 0.8.6",
  "reqwest",
  "serde",
@@ -733,6 +737,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "groundwater"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -771,6 +787,14 @@ name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
+
+[[package]]
+name = "heritage-vulnerability"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "http"
@@ -1163,6 +1187,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b947ae49db0d222b1dbc6b113ce7248a3fc3a6ca21b696717bfc000ba4484d8"
 
 [[package]]
+name = "microbiome"
+version = "1.0.0"
+dependencies = [
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1377,6 +1410,16 @@ dependencies = [
  "parking_lot",
  "protobuf",
  "thiserror",
+]
+
+[[package]]
+name = "protection-penetration"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
