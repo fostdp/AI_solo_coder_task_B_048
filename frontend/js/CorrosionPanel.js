@@ -3,7 +3,10 @@ const CorrosionPanel = (() => {
     let trendCtx = null;
     let currentProbe = null;
 
-    function init() {
+    function init(containerEl) {
+        if (containerEl) {
+            containerEl.innerHTML = '<div id="probe-detail"></div>';
+        }
         trendCanvas = document.getElementById('trend-chart');
         if (trendCanvas) {
             trendCtx = trendCanvas.getContext('2d');
@@ -13,6 +16,14 @@ const CorrosionPanel = (() => {
                 if (currentProbe) renderTrend(currentProbe.trendData || []);
             });
         }
+    }
+
+    function clear() {
+        const panel = document.getElementById('probe-detail');
+        if (panel) panel.innerHTML = '';
+        trendCanvas = null;
+        trendCtx = null;
+        currentProbe = null;
     }
 
     function resizeTrendCanvas() {
@@ -226,5 +237,5 @@ const CorrosionPanel = (() => {
         return t === 'copper' ? '铜质' : t === 'iron' ? '铁质' : '其他';
     }
 
-    return { init, showLoading, render };
+    return { init, clear, showLoading, render };
 })();

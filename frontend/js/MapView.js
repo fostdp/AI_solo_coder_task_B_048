@@ -7,10 +7,13 @@ const MapView = (() => {
     let heatmapCanvas = null;
     let heatmapCtx = null;
     let markersLayer = null;
+    let soilLayer = null;
+    let corrosionLayer = null;
     let siteBounds = null;
     let heatmapData = [];
     let allLocations = [];
     let onProbeClick = null;
+    let heatmapVisible = true;
 
     function init(onClickCallback) {
         onProbeClick = onClickCallback;
@@ -31,6 +34,8 @@ const MapView = (() => {
         }).addTo(map);
 
         markersLayer = L.layerGroup().addTo(map);
+        soilLayer = L.layerGroup().addTo(map);
+        corrosionLayer = L.layerGroup().addTo(map);
 
         drawSiteBoundary();
         createHeatmapCanvas();
@@ -96,8 +101,11 @@ const MapView = (() => {
         heatmapCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
-    function renderMarkers(locations) {
+    function renderMarkers(locations, onClickCallback) {
+        if (onClickCallback) onProbeClick = onClickCallback;
         allLocations = locations;
+        soilLayer.clearLayers();
+        corrosionLayer.clearLayers();
         markersLayer.clearLayers();
 
         locations.forEach(loc => {
@@ -105,7 +113,7 @@ const MapView = (() => {
             const color = isSoil ? '#4caf50' : (loc.material_type === 'copper' ? '#ff9800' : '#f44336');
             const icon = L.divIcon({
                 className: 'probe-icon',
-                html: `<div style="
+                html: `<div deviceId="${loc.device_id}" style="
                     width:${isSoil ? 10 : 14}px;
                     height:${isSoil ? 10 : 14}px;
                     background:${color};
@@ -127,9 +135,31 @@ const MapView = (() => {
                     highlightProbe(loc.device_id);
                     if (onProbeClick) onProbeClick(loc);
                 });
+                marker.addTo(corrosionLayer);
+            } else {
+                marker.on('click', () => {
+                    if (onProbeClick) onProbeClick(loc);
+                });
+                marker.addTo(soilLayer);
             }
-            marker.addTo(markersLayer);
         });
+    }
+
+    function toggleHeatmap(visible) {
+        heatmapVisible = visible;
+        if (heatmapCanvas) {
+            heatmapCanvas.style.display = visible ? 'block' : 'none';
+            if (visible) renderHeatmap();
+        }
+    }
+
+    function toggleLayer(layerType, visible) {
+        if (!map) return;
+        if (layerType === 'soil') {
+            if (visible) map.addLayer(soilLayer); else map.removeLayer(soilLayer);
+        } else if (layerType === 'corrosion') {
+            if (visible) map.addLayer(corrosionLayer); else map.removeLayer(corrosionLayer);
+        }
     }
 
     function highlightProbe(deviceId) {
@@ -220,5 +250,7 @@ const MapView = (() => {
         setHeatmapData,
         focusDevice,
         highlightProbe,
+        toggleHeatmap,
+        toggleLayer,
     };
 })();

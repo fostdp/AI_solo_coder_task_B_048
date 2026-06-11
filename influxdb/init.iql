@@ -35,10 +35,27 @@ CREATE RETENTION POLICY "rp_1d" ON "corrosion_data" DURATION 1095d REPLICATION 1
 --     tags: sensor_id, zone, sensor_type
 --     fields: temperature (celsius), humidity (%), ph, chloride (ppm)
 --
+--   - eds_data: EDS能谱成分数据
+--     tags: probe_id, zone, artifact_id, alloy_type
+--     fields: fe_pct, cu_pct, sn_pct, pb_pct, zn_pct, au_pct, ag_pct,
+--             c_pct, o_pct, p_pct, s_pct, cl_pct, heterogeneity
+--
+--   - microbiome: 土壤微生物测序数据
+--     tags: sample_id, zone
+--     fields: shannon_index, biomass, acid_generating, sulfur_oxidizing,
+--             iron_reducing, iron_oxidizing, eps_producing,
+--             antibiotic_resistance, other_functional, evenness, toc
+--
+--   - groundwater: 地下水监测数据
+--     tags: well_id, zone, well_type
+--     fields: water_level (m), hydraulic_head (m), chloride_ppm,
+--             temperature (celsius), ph, conductivity (uS/cm),
+--             flow_velocity_x (m/s), flow_velocity_y (m/s)
+--
 -- 降采样测量:
---   - rp_1m: corrosion_1m, soil_1m
---   - rp_1h: corrosion_1h, soil_1h
---   - rp_1d: corrosion_1d
+--   - rp_1m: corrosion_1m, soil_1m, eds_1m, microbiome_1m, groundwater_1m
+--   - rp_1h: corrosion_1h, soil_1h, eds_1h, microbiome_1h, groundwater_1h
+--   - rp_1d: corrosion_1d, soil_1d, eds_1d, microbiome_1d, groundwater_1d
 --
 -- ============================================================
 
@@ -136,4 +153,190 @@ BEGIN
   INTO "corrosion_data"."rp_1d"."soil_1d"
   FROM "corrosion_data"."rp_1h"."soil_1h"
   GROUP BY time(1d), "sensor_id", "zone"
+END;
+
+-- ============================================================
+-- 六、EDS能谱数据降采样
+-- ============================================================
+
+CREATE CONTINUOUS QUERY "cq_eds_1m" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("fe_pct") AS "mean_fe_pct",
+    mean("cu_pct") AS "mean_cu_pct",
+    mean("sn_pct") AS "mean_sn_pct",
+    mean("pb_pct") AS "mean_pb_pct",
+    mean("zn_pct") AS "mean_zn_pct",
+    mean("au_pct") AS "mean_au_pct",
+    mean("ag_pct") AS "mean_ag_pct",
+    mean("c_pct") AS "mean_c_pct",
+    mean("o_pct") AS "mean_o_pct",
+    mean("p_pct") AS "mean_p_pct",
+    mean("s_pct") AS "mean_s_pct",
+    mean("cl_pct") AS "mean_cl_pct",
+    mean("heterogeneity") AS "mean_heterogeneity"
+  INTO "corrosion_data"."rp_1m"."eds_1m"
+  FROM "corrosion_data"."autogen"."eds_data"
+  GROUP BY time(1m), "probe_id", "zone", "artifact_id", "alloy_type"
+END;
+
+CREATE CONTINUOUS QUERY "cq_eds_1h" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("mean_fe_pct") AS "mean_fe_pct",
+    mean("mean_cu_pct") AS "mean_cu_pct",
+    mean("mean_sn_pct") AS "mean_sn_pct",
+    mean("mean_pb_pct") AS "mean_pb_pct",
+    mean("mean_zn_pct") AS "mean_zn_pct",
+    mean("mean_au_pct") AS "mean_au_pct",
+    mean("mean_ag_pct") AS "mean_ag_pct",
+    mean("mean_c_pct") AS "mean_c_pct",
+    mean("mean_o_pct") AS "mean_o_pct",
+    mean("mean_p_pct") AS "mean_p_pct",
+    mean("mean_s_pct") AS "mean_s_pct",
+    mean("mean_cl_pct") AS "mean_cl_pct",
+    mean("mean_heterogeneity") AS "mean_heterogeneity"
+  INTO "corrosion_data"."rp_1h"."eds_1h"
+  FROM "corrosion_data"."rp_1m"."eds_1m"
+  GROUP BY time(1h), "probe_id", "zone", "artifact_id", "alloy_type"
+END;
+
+CREATE CONTINUOUS QUERY "cq_eds_1d" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("mean_fe_pct") AS "mean_fe_pct",
+    mean("mean_cu_pct") AS "mean_cu_pct",
+    mean("mean_sn_pct") AS "mean_sn_pct",
+    mean("mean_pb_pct") AS "mean_pb_pct",
+    mean("mean_zn_pct") AS "mean_zn_pct",
+    mean("mean_au_pct") AS "mean_au_pct",
+    mean("mean_ag_pct") AS "mean_ag_pct",
+    mean("mean_c_pct") AS "mean_c_pct",
+    mean("mean_o_pct") AS "mean_o_pct",
+    mean("mean_p_pct") AS "mean_p_pct",
+    mean("mean_s_pct") AS "mean_s_pct",
+    mean("mean_cl_pct") AS "mean_cl_pct",
+    mean("mean_heterogeneity") AS "mean_heterogeneity"
+  INTO "corrosion_data"."rp_1d"."eds_1d"
+  FROM "corrosion_data"."rp_1h"."eds_1h"
+  GROUP BY time(1d), "probe_id", "zone", "artifact_id", "alloy_type"
+END;
+
+-- ============================================================
+-- 七、微生物数据降采样
+-- ============================================================
+
+CREATE CONTINUOUS QUERY "cq_microbiome_1m" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("shannon_index") AS "mean_shannon_index",
+    mean("biomass") AS "mean_biomass",
+    mean("acid_generating") AS "mean_acid_generating",
+    mean("sulfur_oxidizing") AS "mean_sulfur_oxidizing",
+    mean("iron_reducing") AS "mean_iron_reducing",
+    mean("iron_oxidizing") AS "mean_iron_oxidizing",
+    mean("eps_producing") AS "mean_eps_producing",
+    mean("antibiotic_resistance") AS "mean_antibiotic_resistance",
+    mean("other_functional") AS "mean_other_functional",
+    mean("evenness") AS "mean_evenness",
+    mean("toc") AS "mean_toc"
+  INTO "corrosion_data"."rp_1m"."microbiome_1m"
+  FROM "corrosion_data"."autogen"."microbiome"
+  GROUP BY time(1m), "sample_id", "zone"
+END;
+
+CREATE CONTINUOUS QUERY "cq_microbiome_1h" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("mean_shannon_index") AS "mean_shannon_index",
+    mean("mean_biomass") AS "mean_biomass",
+    mean("mean_acid_generating") AS "mean_acid_generating",
+    mean("mean_sulfur_oxidizing") AS "mean_sulfur_oxidizing",
+    mean("mean_iron_reducing") AS "mean_iron_reducing",
+    mean("mean_iron_oxidizing") AS "mean_iron_oxidizing",
+    mean("mean_eps_producing") AS "mean_eps_producing",
+    mean("mean_antibiotic_resistance") AS "mean_antibiotic_resistance",
+    mean("mean_other_functional") AS "mean_other_functional",
+    mean("mean_evenness") AS "mean_evenness",
+    mean("mean_toc") AS "mean_toc"
+  INTO "corrosion_data"."rp_1h"."microbiome_1h"
+  FROM "corrosion_data"."rp_1m"."microbiome_1m"
+  GROUP BY time(1h), "sample_id", "zone"
+END;
+
+CREATE CONTINUOUS QUERY "cq_microbiome_1d" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("mean_shannon_index") AS "mean_shannon_index",
+    mean("mean_biomass") AS "mean_biomass",
+    mean("mean_acid_generating") AS "mean_acid_generating",
+    mean("mean_sulfur_oxidizing") AS "mean_sulfur_oxidizing",
+    mean("mean_iron_reducing") AS "mean_iron_reducing",
+    mean("mean_iron_oxidizing") AS "mean_iron_oxidizing",
+    mean("mean_eps_producing") AS "mean_eps_producing",
+    mean("mean_antibiotic_resistance") AS "mean_antibiotic_resistance",
+    mean("mean_other_functional") AS "mean_other_functional",
+    mean("mean_evenness") AS "mean_evenness",
+    mean("mean_toc") AS "mean_toc",
+    min("mean_shannon_index") AS "min_shannon_index",
+    max("mean_shannon_index") AS "max_shannon_index"
+  INTO "corrosion_data"."rp_1d"."microbiome_1d"
+  FROM "corrosion_data"."rp_1h"."microbiome_1h"
+  GROUP BY time(1d), "sample_id", "zone"
+END;
+
+-- ============================================================
+-- 八、地下水监测数据降采样
+-- ============================================================
+
+CREATE CONTINUOUS QUERY "cq_groundwater_1m" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("water_level") AS "mean_water_level",
+    mean("hydraulic_head") AS "mean_hydraulic_head",
+    mean("chloride_ppm") AS "mean_chloride_ppm",
+    max("chloride_ppm") AS "max_chloride_ppm",
+    mean("temperature") AS "mean_temperature",
+    mean("ph") AS "mean_ph",
+    mean("conductivity") AS "mean_conductivity",
+    mean("flow_velocity_x") AS "mean_flow_velocity_x",
+    mean("flow_velocity_y") AS "mean_flow_velocity_y"
+  INTO "corrosion_data"."rp_1m"."groundwater_1m"
+  FROM "corrosion_data"."autogen"."groundwater"
+  GROUP BY time(1m), "well_id", "zone", "well_type"
+END;
+
+CREATE CONTINUOUS QUERY "cq_groundwater_1h" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("mean_water_level") AS "mean_water_level",
+    mean("mean_hydraulic_head") AS "mean_hydraulic_head",
+    mean("mean_chloride_ppm") AS "mean_chloride_ppm",
+    max("max_chloride_ppm") AS "max_chloride_ppm",
+    mean("mean_temperature") AS "mean_temperature",
+    mean("mean_ph") AS "mean_ph",
+    mean("mean_conductivity") AS "mean_conductivity",
+    mean("mean_flow_velocity_x") AS "mean_flow_velocity_x",
+    mean("mean_flow_velocity_y") AS "mean_flow_velocity_y"
+  INTO "corrosion_data"."rp_1h"."groundwater_1h"
+  FROM "corrosion_data"."rp_1m"."groundwater_1m"
+  GROUP BY time(1h), "well_id", "zone", "well_type"
+END;
+
+CREATE CONTINUOUS QUERY "cq_groundwater_1d" ON "corrosion_data"
+BEGIN
+  SELECT
+    mean("mean_water_level") AS "mean_water_level",
+    mean("mean_hydraulic_head") AS "mean_hydraulic_head",
+    mean("mean_chloride_ppm") AS "mean_chloride_ppm",
+    max("max_chloride_ppm") AS "max_chloride_ppm",
+    min("mean_chloride_ppm") AS "min_chloride_ppm",
+    mean("mean_temperature") AS "mean_temperature",
+    mean("mean_ph") AS "mean_ph",
+    mean("mean_conductivity") AS "mean_conductivity",
+    mean("mean_flow_velocity_x") AS "mean_flow_velocity_x",
+    mean("mean_flow_velocity_y") AS "mean_flow_velocity_y"
+  INTO "corrosion_data"."rp_1d"."groundwater_1d"
+  FROM "corrosion_data"."rp_1h"."groundwater_1h"
+  GROUP BY time(1d), "well_id", "zone", "well_type"
 END;

@@ -4,6 +4,10 @@ pub mod corrosion_engine;
 pub mod storage;
 pub mod alert_broker;
 pub mod metrics;
+pub mod heritage_vulnerability;
+pub mod protection_penetration;
+pub mod microbiome;
+pub mod groundwater;
 
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
@@ -15,6 +19,10 @@ use ingress::{LoraGateway, receive_lora_data, get_gateway_stats};
 use corrosion_engine::{CorrosionPredictor, StabilityAnalyzer, calculate_corrosion_rate_lpr};
 use storage::StorageService;
 use alert_broker::AlertService;
+use heritage_vulnerability::{FuzzyEvaluator, mock_eds_for_location};
+use protection_penetration::{PenetrationSimulator, get_material, all_materials, MaterialType};
+use microbiome::{MicrobeCorrelationAnalyzer, default_microbe_dataset, MicrobiomeSample};
+use groundwater::{GroundwaterModel, ChlorideTransport, default_simulation_params, default_sensitive_zones_list};
 use prometheus::Registry;
 
 pub struct AppState {
@@ -25,6 +33,10 @@ pub struct AppState {
     pub gateway: LoraGateway,
     pub locations: Vec<ProbeLocation>,
     pub registry: Registry,
+    pub fuzzy_evaluator: FuzzyEvaluator,
+    pub penetration_sim: PenetrationSimulator,
+    pub microbe_analyzer: MicrobeCorrelationAnalyzer,
+    pub microbe_dataset: Vec<MicrobiomeSample>,
 }
 
 async fn health_check() -> impl Responder {
@@ -146,6 +158,115 @@ async fn get_stability(
     HttpResponse::Ok().json(ApiResponse::ok(assessment))
 }
 
+async fn get_vulnerability(
+    data: web::Data<Arc<AppState>>,
+    path: web::Path<String>,
+) -> impl Responder {
+    let probe_id = path.into_inner();
+    let loc = match data.locations.iter().find(|l| l.device_id == probe_id) {
+        Some(l) => l,
+        None => return HttpResponse::NotFound().json(ApiResponse::<()>::error("Probe not found")),
+    };
+    let eds = match mock_eds_for_location(loc) {
+        Some(e) => e,
+        None => return HttpResponse::BadRequest().json(ApiResponse::<()>::error("Only corrosion probes have EDS data")),
+    };
+    let current = data.store.reader.query_latest_corrosion_rate(&probe_id).await.unwrap_or(0.15);
+    let (temp, hum, ph, cl) = data.store.reader.query_zone_avg_env(&loc.zone, 72).await;
+    let temp = if temp == 0.0 { 15.0 } else { temp };
+    let hum = if hum == 0.0 { 50.0 } else { hum };
+    let ph = if ph == 0.0 { 7.0 } else { ph };
+    let cl = if cl == 0.0 { 50.0 } else { cl };
+    let result = data.fuzzy_evaluator.evaluate(&eds, current, temp, hum, ph, cl);
+    HttpResponse::Ok().json(ApiResponse::ok(result))
+}
+
+async fn get_all_vulnerabilities(
+    data: web::Data<Arc<AppState>>,
+) -> impl Responder {
+    let mut results = Vec::new();
+    for loc in data.locations.iter().filter(|l| l.device_type == "corrosion_probe") {
+        if let Some(eds) = mock_eds_for_location(loc) {
+            let current = data.store.reader.query_latest_corrosion_rate(&loc.device_id).await.unwrap_or(0.15);
+            let (temp, hum, ph, cl) = data.store.reader.query_zone_avg_env(&loc.zone, 72).await;
+            let temp = if temp == 0.0 { 15.0 } else { temp };
+            let hum = if hum == 0.0 { 50.0 } else { hum };
+            let ph = if ph == 0.0 { 7.0 } else { ph };
+            let cl = if cl == 0.0 { 50.0 } else { cl };
+            results.push(data.fuzzy_evaluator.evaluate(&eds, current, temp, hum, ph, cl));
+        }
+    }
+    HttpResponse::Ok().json(ApiResponse::ok(results))
+}
+
+async fn simulate_penetration(
+    data: web::Data<Arc<AppState>>,
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let material_name = query.get("material").cloned().unwrap_or_else(|| "Silicone".to_string());
+    let material = match material_name.as_str() {
+        "Silicone" | "有机硅" => MaterialType::Silicone,
+        "Fluoropolymer" | "氟聚合物" => MaterialType::Fluoropolymer,
+        "Acrylate" | "丙烯酸酯" => MaterialType::Acrylate,
+        "Epoxy" | "环氧树脂" => MaterialType::Epoxy,
+        "Paraffin" | "石蜡" => MaterialType::Paraffin,
+        "NanoSiO2" | "纳米SiO2" => MaterialType::NanoSiO2,
+        _ => MaterialType::Silicone,
+    };
+    let temp: f64 = query.get("temperature").and_then(|s| s.parse().ok()).unwrap_or(20.0);
+    let hum: f64 = query.get("humidity").and_then(|s| s.parse().ok()).unwrap_or(50.0);
+    let porosity: f64 = query.get("porosity").and_then(|s| s.parse().ok()).unwrap_or(0.15);
+    let conc: f64 = query.get("concentration").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let hours: f64 = query.get("hours").and_then(|s| s.parse().ok()).unwrap_or(24.0);
+    let mat = get_material(material);
+    let result = data.penetration_sim.simulate(&mat, temp, hum, porosity, conc, hours, None);
+    HttpResponse::Ok().json(ApiResponse::ok(result))
+}
+
+async fn get_protection_materials() -> impl Responder {
+    HttpResponse::Ok().json(ApiResponse::ok(all_materials()))
+}
+
+async fn get_microbiome_analysis(data: web::Data<Arc<AppState>>) -> impl Responder {
+    let result = data.microbe_analyzer.analyze(&data.microbe_dataset);
+    HttpResponse::Ok().json(ApiResponse::ok(result))
+}
+
+async fn get_microbiome_samples(data: web::Data<Arc<AppState>>) -> impl Responder {
+    HttpResponse::Ok().json(ApiResponse::ok(data.microbe_dataset.clone()))
+}
+
+async fn simulate_groundwater(
+    query: web::Query<std::collections::HashMap<String, String>>,
+) -> impl Responder {
+    let days: f64 = query.get("days").and_then(|s| s.parse().ok()).unwrap_or(90.0);
+    let threshold: f64 = query.get("threshold").and_then(|s| s.parse().ok()).unwrap_or(100.0);
+    let (rows, cols, size, wells) = default_simulation_params();
+    let model = GroundwaterModel::new(rows, cols, size);
+    let flow = model.solve_steady_state(
+        15.0,
+        10.0,
+        None,
+        None,
+        1e-5,
+        None,
+        &wells,
+        0.0,
+        0.0,
+    );
+    let zones = default_sensitive_zones_list();
+    let transport = ChlorideTransport::new();
+    let diffusion = transport.simulate(&flow, days, threshold, &zones);
+    HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
+        "flow_field": flow,
+        "diffusion": diffusion,
+    })))
+}
+
+async fn get_groundwater_sensitive_zones() -> impl Responder {
+    HttpResponse::Ok().json(ApiResponse::ok(default_sensitive_zones_list()))
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
@@ -170,6 +291,10 @@ async fn main() -> std::io::Result<()> {
     let gateway = LoraGateway::new();
     let locations = generate_device_locations();
     let registry = metrics::register_custom_metrics();
+    let fuzzy_evaluator = FuzzyEvaluator::new();
+    let penetration_sim = PenetrationSimulator::new();
+    let microbe_analyzer = MicrobeCorrelationAnalyzer::new();
+    let microbe_dataset = default_microbe_dataset();
 
     let app_state = Arc::new(AppState {
         config,
@@ -179,6 +304,10 @@ async fn main() -> std::io::Result<()> {
         gateway,
         locations,
         registry,
+        fuzzy_evaluator,
+        penetration_sim,
+        microbe_analyzer,
+        microbe_dataset,
     });
 
     tracing::info!("Starting HTTP server at http://{}", listen_addr);
@@ -197,6 +326,14 @@ async fn main() -> std::io::Result<()> {
             .route("/api/corrosion/heatmap", web::get().to(get_heatmap))
             .route("/api/corrosion/prediction/{probe_id}", web::get().to(get_prediction))
             .route("/api/corrosion/stability/{probe_id}", web::get().to(get_stability))
+            .route("/api/vulnerability/{probe_id}", web::get().to(get_vulnerability))
+            .route("/api/vulnerability/all", web::get().to(get_all_vulnerabilities))
+            .route("/api/protection/materials", web::get().to(get_protection_materials))
+            .route("/api/protection/simulate", web::get().to(simulate_penetration))
+            .route("/api/microbiome/samples", web::get().to(get_microbiome_samples))
+            .route("/api/microbiome/analysis", web::get().to(get_microbiome_analysis))
+            .route("/api/groundwater/sensitive-zones", web::get().to(get_groundwater_sensitive_zones))
+            .route("/api/groundwater/simulate", web::get().to(simulate_groundwater))
     })
     .bind(&listen_addr)?
     .run()
