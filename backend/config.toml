@@ -1,0 +1,31 @@
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[influxdb]
+url = "http://localhost:8086"
+token = "corrosion-monitor-token-2026"
+org = "archaeology"
+bucket = "corrosion_data"
+batch_size = 50
+flush_interval_ms = 1000
+max_pending = 5000
+
+[thresholds]
+corrosion_rate = 0.5
+chloride = 100.0
+
+[alert.wecom]
+webhook_url = ""
+
+[alert.sms]
+access_key_id = ""
+access_key_secret = ""
+sign_name = "考古监测"
+template_code = ""
+phone_numbers = []
+
+[corrosion_engine]
+hidden_size = 16
+dropout_rate = 0.2
+l2_lambda = 0.001

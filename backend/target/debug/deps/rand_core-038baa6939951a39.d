@@ -1,0 +1,11 @@
+D:\SOLO-2\AI_solo_coder_task_A_048\backend\target\debug\deps\rand_core-038baa6939951a39.d: C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\lib.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\block.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\utils.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\seedable_rng.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\unwrap_err.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\word.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\../README.md
+
+D:\SOLO-2\AI_solo_coder_task_A_048\backend\target\debug\deps\librand_core-038baa6939951a39.rmeta: C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\lib.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\block.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\utils.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\seedable_rng.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\unwrap_err.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\word.rs C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\../README.md
+
+C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\lib.rs:
+C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\block.rs:
+C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\utils.rs:
+C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\seedable_rng.rs:
+C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\unwrap_err.rs:
+C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\word.rs:
+C:\Users\y\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rand_core-0.10.1\src\../README.md:
