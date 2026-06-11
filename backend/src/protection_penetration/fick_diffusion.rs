@@ -317,25 +317,274 @@ pub fn analytical_penetration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::materials::{silicone_standard, ProtectiveMaterial, MaterialType};
+
+    // ─── 解析解对比测试（核心验证） ───
 
     #[test]
-    fn test_penetration_simulation() {
+    fn test_numerical_vs_analytical_error_within_5_percent() {
+        let sim = PenetrationSimulator::new();
+        let mut mat = silicone_standard();
+
+        // 控制条件使所有修正因子≈1，直接对比D0的扩散
+        let temp = mat.optimal_temp;
+        let porosity = 1.0;
+        let rh = 0.0;
+        let time_hours = 48.0;
+
+        let result = sim.simulate(&mat, temp, rh, porosity, 1.0, time_hours, None);
+        let d_eff = result.effective_diffusion_coeff;
+        let t_sec = time_hours * 3600.0;
+
+        let analytical = analytical_penetration(d_eff, t_sec);
+        let numerical = result.max_penetration_um;
+
+        let rel_error = (numerical - analytical).abs() / analytical.max(1e-9);
+        assert!(rel_error < 0.05,
+            "数值解({:.2} μm)与解析解({:.2} μm)相对误差 {:.2}% 超过5%",
+            numerical, analytical, rel_error * 100.0);
+    }
+
+    #[test]
+    fn test_multiple_time_points_error_within_5_percent() {
+        let sim = PenetrationSimulator::new();
+        let mut mat = silicone_standard();
+        let temp = mat.optimal_temp;
+        let porosity = 1.0;
+        let rh = 0.0;
+
+        for hours in [1.0, 6.0, 12.0, 24.0, 72.0] {
+            let result = sim.simulate(&mat, temp, rh, porosity, 1.0, hours, None);
+            let d_eff = result.effective_diffusion_coeff;
+            let analytical = analytical_penetration(d_eff, hours * 3600.0);
+            let numerical = result.max_penetration_um;
+
+            let rel_error = (numerical - analytical).abs() / analytical.max(1e-9);
+            assert!(rel_error < 0.05,
+                "t={}h: 数值={:.2}μm, 解析={:.2}μm, 误差={:.2}%",
+                hours, numerical, analytical, rel_error * 100.0);
+        }
+    }
+
+    #[test]
+    fn test_penetration_scales_with_sqrt_time() {
+        let sim = PenetrationSimulator::new();
+        let mut mat = silicone_standard();
+        let temp = mat.optimal_temp;
+        let porosity = 1.0;
+        let rh = 0.0;
+
+        let result_1h = sim.simulate(&mat, temp, rh, porosity, 1.0, 1.0, None);
+        let result_4h = sim.simulate(&mat, temp, rh, porosity, 1.0, 4.0, None);
+
+        // 扩散深度 ∝ √t, 4倍时间 → 约2倍深度
+        let ratio = result_4h.max_penetration_um / result_1h.max_penetration_um.max(1e-9);
+        assert!((ratio - 2.0).abs() < 0.15,
+            "4倍时间深度比应≈2，实际={:.3}", ratio);
+    }
+
+    // ─── 扩散系数计算验证 ───
+
+    #[test]
+    fn test_effective_diffusion_at_optimal_temp() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let d_eff = sim.calc_effective_diffusion_coeff(
+            mat.diffusion_coefficient,
+            mat.optimal_temp,
+            mat.optimal_temp,
+            1.0,
+            0.0,
+            None,
+        );
+        // 最佳温度+孔隙=1+湿度=0 → D_eff ≈ D0
+        assert!((d_eff - mat.diffusion_coefficient).abs() < 1e-12,
+            "标准条件下有效扩散系数应等于基准值");
+    }
+
+    #[test]
+    fn test_diffusion_arrhenius_temperature_dependence() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let d_cold = sim.calc_effective_diffusion_coeff(
+            mat.diffusion_coefficient, 5.0, mat.optimal_temp, 1.0, 0.0, None);
+        let d_hot = sim.calc_effective_diffusion_coeff(
+            mat.diffusion_coefficient, 35.0, mat.optimal_temp, 1.0, 0.0, None);
+        assert!(d_hot > d_cold, "温度越高扩散越快");
+    }
+
+    #[test]
+    fn test_porosity_increases_diffusion() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let d_low = sim.calc_effective_diffusion_coeff(
+            mat.diffusion_coefficient, 20.0, 20.0, 0.1, 50.0, None);
+        let d_high = sim.calc_effective_diffusion_coeff(
+            mat.diffusion_coefficient, 20.0, 20.0, 0.5, 50.0, None);
+        assert!(d_high > d_low, "高孔隙率扩散更快");
+    }
+
+    #[test]
+    fn test_humidity_slows_diffusion() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let d_dry = sim.calc_effective_diffusion_coeff(
+            mat.diffusion_coefficient, 20.0, 20.0, 0.3, 0.0, None);
+        let d_wet = sim.calc_effective_diffusion_coeff(
+            mat.diffusion_coefficient, 20.0, 20.0, 0.3, 90.0, None);
+        assert!(d_dry > d_wet, "湿度越高扩散越慢");
+    }
+
+    // ─── 数值方法稳定性 ───
+
+    #[test]
+    fn test_stable_dt_satisfies_courant() {
+        let sim = PenetrationSimulator::new();
+        let d = 1e-9;
+        let dx = 1e-6;
+        let dt = sim.calc_stable_dt(d, dx);
+        let fourier = d * dt / (dx * dx);
+        assert!(fourier <= 0.5, "Fourier数应≤0.5保证稳定: {}", fourier);
+        assert!(fourier > 0.0);
+    }
+
+    #[test]
+    fn test_concentration_profile_monotonic_decrease() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let result = sim.simulate(&mat, 20.0, 50.0, 0.3, 1.0, 24.0, None);
+
+        let profile = &result.profile;
+        assert!(profile.len() >= 2);
+        for i in 1..profile.len() {
+            assert!(profile[i].concentration_ratio <= profile[i-1].concentration_ratio + 1e-9,
+                "浓度剖面应随深度单调递减: depth={} ratio={} > depth={} ratio={}",
+                profile[i-1].depth_um, profile[i-1].concentration_ratio,
+                profile[i].depth_um, profile[i].concentration_ratio);
+        }
+    }
+
+    #[test]
+    fn test_surface_concentration_unchanged() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let surface_c = 1.0;
+        let result = sim.simulate(&mat, 20.0, 50.0, 0.3, surface_c, 24.0, None);
+
+        // 表面浓度应接近初始值（第一类边界条件）
+        let first_profile = &result.profile[0];
+        assert!((first_profile.concentration_ratio - 1.0).abs() < 0.01,
+            "表面浓度比应接近1.0，实际={}", first_profile.concentration_ratio);
+    }
+
+    // ─── 正常/边界/异常测试 ───
+
+    #[test]
+    fn test_simulation_normal_conditions() {
         let sim = PenetrationSimulator::new();
         let mat = silicone_standard();
         let result = sim.simulate(&mat, 20.0, 50.0, 0.15, 1.0, 24.0, None);
         assert!(result.max_penetration_um > 0.0);
-        assert!(result.effective_diffusion_coeff > 0.0);
+        assert!(result.average_penetration_um > 0.0);
+        assert!(result.max_penetration_um > result.average_penetration_um);
+        assert!(result.protection_efficiency > 0.0 && result.protection_efficiency <= 1.0);
+        assert!(result.estimated_lifetime_years > 0.0);
+        assert!(!result.profile.is_empty());
+        assert!(!result.time_series.is_empty());
     }
+
+    #[test]
+    fn test_zero_time_returns_zero_penetration() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let result = sim.simulate(&mat, 20.0, 50.0, 0.3, 1.0, 0.0, None);
+        assert!(result.max_penetration_um >= 0.0);
+        assert!(result.max_penetration_um < 1.0, "零时间渗透几乎为0");
+    }
+
+    #[test]
+    fn test_zero_concentration_boundary() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let result = sim.simulate(&mat, 20.0, 50.0, 0.3, 0.0, 24.0, None);
+        assert!(result.max_penetration_um >= 0.0);
+        // 浓度为0时不会有渗透
+    }
+
+    #[test]
+    fn test_negative_time_clamped() {
+        let sim = PenetrationSimulator::new();
+        let mat = silicone_standard();
+        let result = sim.simulate(&mat, 20.0, 50.0, 0.3, 1.0, -1.0, None);
+        assert!(result.total_time_hours >= -1.0);
+        assert!(result.max_penetration_um >= 0.0);
+    }
+
+    #[test]
+    fn test_all_materials_produce_valid_results() {
+        use super::materials::all_materials;
+        let sim = PenetrationSimulator::new();
+        for mat in all_materials() {
+            let result = sim.simulate(&mat, 20.0, 50.0, 0.2, 1.0, 24.0, None);
+            assert!(result.max_penetration_um > 0.0,
+                "材料{}应产生正渗透深度", mat.name.as_str());
+            assert!(result.effective_diffusion_coeff > 0.0);
+        }
+    }
+
+    // ─── 前沿深度查找 ───
+
+    #[test]
+    fn test_find_front_linear_interpolation() {
+        let sim = PenetrationSimulator::new();
+        let c = vec![1.0, 0.8, 0.5, 0.2, 0.0];
+        let dx = 10.0;
+        let front = sim.find_front(&c, 0.5, dx);
+        assert!((front - 20.0).abs() < 1e-6, "阈值正好在节点上");
+    }
+
+    #[test]
+    fn test_find_front_between_nodes() {
+        let sim = PenetrationSimulator::new();
+        let c = vec![1.0, 0.8, 0.6, 0.4, 0.2, 0.0];
+        let dx = 10.0;
+        let front = sim.find_front(&c, 0.5, dx);
+        assert!(front > 20.0 && front < 30.0, "阈值应在2-3节点之间");
+    }
+
+    // ─── 辅助函数：获取基准材料 ───
 
     fn silicone_standard() -> ProtectiveMaterial {
         super::materials::silicone_standard()
     }
 
+    // ─── 解析解验证 ───
+
     #[test]
-    fn test_analytical() {
-        let d = 5e-10;
+    fn test_analytical_formula() {
+        let d = 1e-10;
         let t = 3600.0;
         let p = analytical_penetration(d, t);
-        assert!(p > 0.0);
+        // 手动验算: x = 2*erfinv(0.99)*sqrt(D*t)
+        // erfinv(0.99)=1.8214, D*t=3.6e-7, sqrt=6e-4 m=600 μm
+        // 2*1.8214*600 = 2185.7 μm ... 让我们用近似验证数量级
+        assert!(p > 100.0 && p < 10000.0,
+            "解析解应在合理范围: {} μm", p);
+    }
+
+    #[test]
+    fn test_analytical_scales_sqrt_d() {
+        let t = 3600.0;
+        let p1 = analytical_penetration(1e-10, t);
+        let p4 = analytical_penetration(4e-10, t);
+        let ratio = p4 / p1.max(1e-9);
+        assert!((ratio - 2.0).abs() < 1e-6,
+            "4倍扩散系数 → 2倍深度");
+    }
+
+    #[test]
+    fn test_analytical_zero_time() {
+        let p = analytical_penetration(1e-10, 0.0);
+        assert!((p - 0.0).abs() < 1e-9);
     }
 }

@@ -453,22 +453,245 @@ pub fn default_simulation_params() -> (usize, usize, f64, Vec<WellPoint>) {
 mod tests {
     use super::*;
 
+    // ─── 流场求解收敛性验证 ───
+
     #[test]
-    fn test_flow_field_solve() {
+    fn test_flow_field_solves_and_converges() {
         let (rows, cols, size, wells) = default_simulation_params();
         let model = GroundwaterModel::new(rows, cols, size);
         let result = model.solve_steady_state(
-            15.0,
-            10.0,
-            None,
-            None,
-            1e-5,
-            None,
-            &wells,
-            0.0,
-            0.0,
+            15.0, 10.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
         );
-        assert!(result.grid.len() == rows * cols);
+        assert_eq!(result.grid.len(), rows * cols);
         assert!(result.iterations > 0);
+        assert!(result.convergence_status, "求解应收敛");
+    }
+
+    // ─── 流场方向验证（与手动计算一致） ───
+
+    #[test]
+    fn test_flow_direction_top_to_bottom() {
+        // 顶部水头15m，底部10m → 流向应向下（y减小方向）
+        let rows = 8;
+        let cols = 8;
+        let size = 10.0;
+        let wells = Vec::new();
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            15.0, 10.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
+        );
+
+        // 取中间列，验证水头随行号增大而减小
+        let col = cols / 2;
+        let mut prev_head = f64::INFINITY;
+        for row in 0..rows {
+            let idx = row * cols + col;
+            let h = result.grid[idx].hydraulic_head_m;
+            assert!(h <= prev_head + 1e-3,
+                "水头应沿流向递减: row={} h={}, prev={}", row, h, prev_head);
+            prev_head = h;
+        }
+    }
+
+    #[test]
+    fn test_flow_direction_left_to_right() {
+        // 左侧高水头，右侧低水头 → 流向向右
+        let rows = 8;
+        let cols = 10;
+        let size = 10.0;
+        let wells = Vec::new();
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            12.0, 12.0, Some(15.0), Some(8.0), 1e-5, None, &wells, 0.0, 0.0,
+        );
+
+        // 取中间行，验证水头随列数增大而减小
+        let row = rows / 2;
+        let mut prev_head = f64::INFINITY;
+        for col in 0..cols {
+            let idx = row * cols + col;
+            let h = result.grid[idx].hydraulic_head_m;
+            assert!(h <= prev_head + 1e-2,
+                "水头应从左向右递减: col={} h={}, prev={}", col, h, prev_head);
+            prev_head = h;
+        }
+    }
+
+    #[test]
+    fn test_uniform_head_no_flow() {
+        // 四周水头相同 → 几乎无流动
+        let rows = 6;
+        let cols = 6;
+        let size = 10.0;
+        let wells = Vec::new();
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            10.0, 10.0, Some(10.0), Some(10.0), 1e-5, None, &wells, 0.0, 0.0,
+        );
+
+        // 所有单元水头应接近10m
+        for cell in &result.grid {
+            assert!((cell.hydraulic_head_m - 10.0).abs() < 0.5,
+                "均匀水头应接近10m: ({},{}) = {}",
+                cell.row, cell.col, cell.hydraulic_head_m);
+        }
+    }
+
+    // ─── 井的影响验证 ───
+
+    #[test]
+    fn test_pumping_well_lowers_head() {
+        let rows = 8;
+        let cols = 8;
+        let size = 10.0;
+        let wells = vec![
+            WellPoint {
+                id: "P1".to_string(),
+                row: 4, col: 4, x: 40.0, y: 40.0,
+                well_type: WellType::Pumping,
+                discharge_rate_m3_d: -50.0,
+                concentration_ppm: 0.0,
+            }
+        ];
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            10.0, 10.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
+        );
+
+        let pump_idx = 4 * cols + 4;
+        let pump_head = result.grid[pump_idx].hydraulic_head_m;
+        let far_idx = 0 * cols + 0;
+        let far_head = result.grid[far_idx].hydraulic_head_m;
+
+        assert!(pump_head < far_head,
+            "抽水井处水头应低于远处: pump={}, far={}", pump_head, far_head);
+    }
+
+    #[test]
+    fn test_recharge_well_raises_head() {
+        let rows = 8;
+        let cols = 8;
+        let size = 10.0;
+        let wells = vec![
+            WellPoint {
+                id: "R1".to_string(),
+                row: 4, col: 4, x: 40.0, y: 40.0,
+                well_type: WellType::Recharge,
+                discharge_rate_m3_d: 30.0,
+                concentration_ppm: 0.0,
+            }
+        ];
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            10.0, 10.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
+        );
+
+        let recharge_idx = 4 * cols + 4;
+        let recharge_head = result.grid[recharge_idx].hydraulic_head_m;
+        let far_idx = 0 * cols + 0;
+        let far_head = result.grid[far_idx].hydraulic_head_m;
+
+        assert!(recharge_head > far_head,
+            "补给井处水头应高于远处: recharge={}, far={}", recharge_head, far_head);
+    }
+
+    // ─── 网格与坐标一致性 ───
+
+    #[test]
+    fn test_grid_coordinates_origin() {
+        let rows = 5;
+        let cols = 5;
+        let size = 10.0;
+        let wells = Vec::new();
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            10.0, 10.0, None, None, 1e-5, None, &wells, 5.0, 10.0,
+        );
+
+        let first = &result.grid[0];
+        assert_eq!(first.row, 0);
+        assert_eq!(first.col, 0);
+        assert!((first.x - 5.0).abs() < 1e-6, "origin_x应作为网格起点");
+        assert!((first.y - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_grid_cell_count_matches() {
+        let rows = 10;
+        let cols = 12;
+        let size = 5.0;
+        let wells = Vec::new();
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            10.0, 8.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
+        );
+        assert_eq!(result.grid.len(), rows * cols);
+        assert_eq!(result.grid_rows, rows);
+        assert_eq!(result.grid_cols, cols);
+        assert_eq!(result.cell_size_m, size);
+    }
+
+    // ─── 流速与水力梯度一致性 ───
+
+    #[test]
+    fn test_velocity_positive_with_gradient() {
+        let (rows, cols, size, wells) = default_simulation_params();
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            15.0, 8.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
+        );
+
+        // 有梯度就应有流速
+        assert!(result.avg_velocity_m_d > 0.0, "存在水力梯度时平均流速应为正");
+        assert!(result.max_velocity_m_d >= result.avg_velocity_m_d);
+        assert!(result.head_gradient > 0.0);
+    }
+
+    // ─── 边界/异常输入处理 ───
+
+    #[test]
+    fn test_zero_conductivity_still_solves() {
+        let rows = 5;
+        let cols = 5;
+        let size = 10.0;
+        let wells = Vec::new();
+        let model = GroundwaterModel::new(rows, cols, size);
+        // 极低渗透系数也应能求解
+        let result = model.solve_steady_state(
+            10.0, 8.0, None, None, 1e-10, None, &wells, 0.0, 0.0,
+        );
+        assert_eq!(result.grid.len(), rows * cols);
+        assert!(result.convergence_status);
+    }
+
+    #[test]
+    fn test_small_grid_solves() {
+        // 最小网格也能工作
+        let model = GroundwaterModel::new(3, 3, 1.0);
+        let wells = Vec::new();
+        let result = model.solve_steady_state(
+            10.0, 5.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
+        );
+        assert_eq!(result.grid.len(), 9);
+        assert!(result.iterations > 0);
+    }
+
+    // ─── 平均水头合理性 ───
+
+    #[test]
+    fn test_avg_head_within_bounds() {
+        let (rows, cols, size, wells) = default_simulation_params();
+        let model = GroundwaterModel::new(rows, cols, size);
+        let result = model.solve_steady_state(
+            15.0, 10.0, None, None, 1e-5, None, &wells, 0.0, 0.0,
+        );
+        assert!(result.avg_head_m > 10.0 && result.avg_head_m < 15.0,
+            "平均水头应在上下边界之间: {}", result.avg_head_m);
+    }
+
+    // ─── 辅助函数：默认模拟参数 ───
+
+    fn default_simulation_params() -> (usize, usize, f64, Vec<WellPoint>) {
+        super::default_simulation_params()
     }
 }
