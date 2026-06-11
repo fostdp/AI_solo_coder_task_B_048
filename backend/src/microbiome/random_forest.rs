@@ -87,6 +87,9 @@ impl MicrobeCorrelationAnalyzer {
         let (features, feature_names, descriptions, effects) = self.build_feature_matrix(samples);
         let targets: Vec<f64> = samples.iter().map(|s| s.corrosion_rate_observed).collect();
 
+        let (features, targets) = self.smote_balance(&features, &targets);
+
+        let n = features.len();
         let n_features = feature_names.len();
         let max_feat = if self.max_features > 0 {
             self.max_features.min(n_features)
@@ -576,6 +579,68 @@ impl MicrobeCorrelationAnalyzer {
         }
     }
 
+    fn smote_balance(&self, features: &[Vec<f64>], targets: &[f64]) -> (Vec<Vec<f64>>, Vec<f64>) {
+        let n = targets.len();
+        if n < 4 {
+            return (features.to_vec(), targets.to_vec());
+        }
+
+        let sorted_targets = {
+            let mut t = targets.to_vec();
+            t.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            t
+        };
+        let median = sorted_targets[n / 2];
+
+        let mut minority_idx: Vec<usize> = Vec::new();
+        let mut majority_idx: Vec<usize> = Vec::new();
+        for (i, &t) in targets.iter().enumerate() {
+            if t >= median {
+                minority_idx.push(i);
+            } else {
+                majority_idx.push(i);
+            }
+        }
+
+        if minority_idx.is_empty() || majority_idx.is_empty() {
+            return (features.to_vec(), targets.to_vec());
+        }
+
+        let diff = majority_idx.len() as i32 - minority_idx.len() as i32;
+        if diff.abs() <= 1 {
+            return (features.to_vec(), targets.to_vec());
+        }
+
+        let mut rng = StdRng::seed_from_u64(self.random_seed + 9999);
+        let num_synthetic = diff.abs() as usize;
+        let n_features = features[0].len();
+
+        let mut synth_features = Vec::with_capacity(num_synthetic);
+        let mut synth_targets = Vec::with_capacity(num_synthetic);
+
+        for _ in 0..num_synthetic {
+            let src_idx = minority_idx[rng.gen_range(0..minority_idx.len())];
+            let nn_idx = minority_idx[rng.gen_range(0..minority_idx.len())];
+
+            let gap: f64 = rng.gen_range(0.0..1.0);
+            let mut synth_row = vec![0.0_f64; n_features];
+            for j in 0..n_features {
+                synth_row[j] = features[src_idx][j] + gap * (features[nn_idx][j] - features[src_idx][j]);
+            }
+            let synth_target = targets[src_idx] + gap * (targets[nn_idx] - targets[src_idx]);
+
+            synth_features.push(synth_row);
+            synth_targets.push(synth_target);
+        }
+
+        let mut balanced_features = features.to_vec();
+        let mut balanced_targets = targets.to_vec();
+        balanced_features.extend(synth_features);
+        balanced_targets.extend(synth_targets);
+
+        (balanced_features, balanced_targets)
+    }
+
     fn compute_overall_risk(
         &self,
         importance: &[FeatureImportance],
@@ -991,5 +1056,114 @@ mod tests {
 
     fn generate_mock_microbiome(id: &str, zone: &str, lat: f64, lng: f64, seed: u64) -> MicrobiomeSample {
         super::microbiome_data::generate_mock_microbiome(id, zone, lat, lng, seed)
+    }
+
+    // ─── SMOTE过采样验证（缺陷修复3） ───
+
+    #[test]
+    fn test_smote_balances_imbalanced_data() {
+        let analyzer = MicrobeCorrelationAnalyzer::new();
+        let features = vec![
+            vec![1.0, 0.1],
+            vec![2.0, 0.2],
+            vec![3.0, 0.3],
+            vec![10.0, 1.0],
+        ];
+        let targets = vec![0.05, 0.08, 0.10, 0.80];
+
+        let (bal_feat, bal_tgt) = analyzer.smote_balance(&features, &targets);
+
+        assert!(bal_feat.len() >= features.len(),
+            "SMOTE后样本数应≥原始数: 原始={}, 平衡后={}", features.len(), bal_feat.len());
+        assert_eq!(bal_feat.len(), bal_tgt.len());
+        for (i, row) in bal_feat.iter().enumerate() {
+            assert_eq!(row.len(), 2, "特征维度应保持不变: 第{}行", i);
+        }
+    }
+
+    #[test]
+    fn test_smote_synthetic_in_range() {
+        let analyzer = MicrobeCorrelationAnalyzer::new();
+        let features = vec![
+            vec![1.0, 10.0],
+            vec![2.0, 20.0],
+            vec![3.0, 30.0],
+            vec![4.0, 40.0],
+            vec![50.0, 500.0],
+        ];
+        let targets = vec![0.05, 0.08, 0.10, 0.12, 0.90];
+
+        let (bal_feat, bal_tgt) = analyzer.smote_balance(&features, &targets);
+
+        for (i, row) in bal_feat.iter().enumerate() {
+            for (j, &v) in row.iter().enumerate() {
+                assert!(v.is_finite(), "合成特征应有限: 行{}列{}", i, j);
+            }
+        }
+        for (i, &t) in bal_tgt.iter().enumerate() {
+            assert!(t.is_finite() && t >= 0.0, "合成目标应非负有限: 行{}", i);
+        }
+    }
+
+    #[test]
+    fn test_smote_balanced_data_unchanged() {
+        let analyzer = MicrobeCorrelationAnalyzer::new();
+        let features = vec![
+            vec![1.0, 0.5],
+            vec![2.0, 1.0],
+            vec![3.0, 1.5],
+            vec![4.0, 2.0],
+        ];
+        let targets = vec![0.1, 0.3, 0.5, 0.7];
+
+        let (bal_feat, bal_tgt) = analyzer.smote_balance(&features, &targets);
+
+        assert_eq!(bal_feat.len(), features.len(),
+            "已平衡数据不应添加合成样本");
+        assert_eq!(bal_tgt.len(), targets.len());
+    }
+
+    #[test]
+    fn test_smote_too_few_samples_passthrough() {
+        let analyzer = MicrobeCorrelationAnalyzer::new();
+        let features = vec![vec![1.0], vec![2.0], vec![3.0]];
+        let targets = vec![0.1, 0.5, 0.9];
+
+        let (bal_feat, bal_tgt) = analyzer.smote_balance(&features, &targets);
+
+        assert_eq!(bal_feat.len(), 3, "不足4样本应直接透传");
+    }
+
+    #[test]
+    fn test_unbalanced_dataset_analysis_no_bias() {
+        let mut samples = Vec::new();
+        for i in 0..4 {
+            let mut s = generate_mock_microbiome(
+                &format!("S{}", i), "低腐蚀区", 34.0, 108.0, i as u64);
+            s.corrosion_rate_observed = 0.05 + i as f64 * 0.02;
+            s.chloride_ppm = 10.0 + i as f64 * 5.0;
+            samples.push(s);
+        }
+        for i in 0..2 {
+            let mut s = generate_mock_microbiome(
+                &format!("SH{}", i), "高腐蚀区", 34.0, 108.0, 100 + i as u64);
+            s.corrosion_rate_observed = 0.80 + i as f64 * 0.05;
+            s.chloride_ppm = 300.0 + i as f64 * 50.0;
+            samples.push(s);
+        }
+
+        let analyzer = MicrobeCorrelationAnalyzer::with_params(30, 5, 2, 42);
+        let result = analyzer.analyze(&samples);
+
+        assert!(!result.overall_microbiome_risk.is_nan());
+        assert!(result.overall_microbiome_risk >= 0.0 && result.overall_microbiome_risk <= 1.0);
+
+        let has_chloride = result.feature_importance
+            .iter()
+            .take(5)
+            .any(|f| f.feature_name.contains("氯离子"));
+        assert!(has_chloride,
+            "不平衡数据中氯离子仍应在重要度前5: {:?}",
+            result.feature_importance.iter().take(5).map(|f| &f.feature_name).collect::<Vec<_>>());
     }
 }
