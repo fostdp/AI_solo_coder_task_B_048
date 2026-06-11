@@ -1,10 +1,22 @@
 [package]
 name = "corrosion-monitor-backend"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2021"
 description = "古代战地医院遗址微环境与出土医疗器具腐蚀监测系统 - 后端服务"
 
+[workspace]
+members = [
+    "crates/heritage-vulnerability",
+    "crates/protection-penetration",
+    "crates/microbiome",
+    "crates/groundwater",
+]
+
 [dependencies]
+heritage-vulnerability = { path = "crates/heritage-vulnerability" }
+protection-penetration = { path = "crates/protection-penetration" }
+microbiome = { path = "crates/microbiome" }
+groundwater = { path = "crates/groundwater" }
 actix-web = "4.4"
 actix-cors = "0.7"
 serde = { version = "1.0", features = ["derive"] }
